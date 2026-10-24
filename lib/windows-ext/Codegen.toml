@@ -43,7 +43,8 @@ constructors = [
     "AcrylicBrush",
     "Flyout",
     "FlyoutShowOptions",
-    "AppBarButton"
+    "AppBarButton",
+    "ComboBox"
 ]
 
 [white_list]
@@ -88,6 +89,10 @@ Slider = true
 Flyout = true
 AppBarButton = true
 ToggleSwitch = true
+ComboBox = true
+ItemCollection = ["Append", "Clear", "Size"]
+SelectionChangedEventHandler = true
+SelectionChangedEventArgs = true
 
 Style = true
 DependencyProperty = true
