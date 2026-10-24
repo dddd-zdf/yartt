@@ -25,8 +25,15 @@ While an option is off, the app doesn't talk to the monitors about it at all.
 
 ## Install
 
-Build it (below) and run `target\release\yartt.exe`. Turn on "Automatically run on startup" in
-Settings to start it with Windows.
+Download `yartt.exe` from [Releases](https://github.com/dddd-zdf/yartt/releases), put it somewhere
+permanent (for example `%LOCALAPPDATA%\Programs\yartt`) and run it. Turn on "Automatically run on
+startup" in Settings to start it with Windows.
+
+From source, `install.ps1` builds it, installs it there and starts it. Run it again to update:
+
+```shell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
 
 Settings live in `%APPDATA%\yartt.ini`. An existing `rusty-twinkle-tray.ini` is moved there on
 first start.

@@ -3,7 +3,7 @@
 YARTT (Yet Another Rusty Twinkle Tray), forked from
 [sidit77/rusty-twinkle-tray](https://github.com/sidit77/rusty-twinkle-tray) on 2026-10-24.
 
-## Unreleased
+## 2026-10-24: first release
 
 - New logo: a monitor with a thin sun. The tray icon comes in 16, 20, 24 and 32 px versions and
   the app picks the one matching the display scaling, so it isn't blurred by scaling. 16 px is
@@ -11,7 +11,7 @@ YARTT (Yet Another Rusty Twinkle Tray), forked from
 - Known issue: on a high-DPI screen the tray sun is nearly invisible (to fix).
 - Renamed to YARTT: the exe is `yartt.exe` and settings live in `%APPDATA%\yartt.ini`. The old
   `rusty-twinkle-tray.ini` is moved there on first start. The autostart entry is now `_YARTT`.
-  Difei: if you had autostart on for an older build, turn it off and on again in Settings.
+  If you had autostart on with Rusty Twinkle Tray, turn it on again in Settings.
 - The tray icon's tooltip shows the current brightness, one line per monitor or one line while
   linked, so scrolling over the icon shows the new level.
 - The settings window scrolls when it's short and wraps its text when it's narrow.
@@ -21,7 +21,7 @@ YARTT (Yet Another Rusty Twinkle Tray), forked from
   While linked, each monitor still shows its own volume and input below the shared slider.
 - Both rows are off by default: turn them on in Settings > Controls ("Show a volume slider…",
   "Show input selection…", saved as `ShowVolume` / `ShowInput`). While off, the app doesn't read
-  them from the monitors at all. Difei: turn them on if you want them.
+  them from the monitors at all.
 - Screen off button in the bottom bar: turns every display off the way Windows does when idle
   (any mouse or key input wakes them).
 - Volume and input writes are skipped when the monitor already has that value.
