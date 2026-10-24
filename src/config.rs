@@ -10,6 +10,7 @@ use log::{debug, warn};
 use windows::core::imp::CoTaskMemFree;
 use windows::Win32::UI::Shell::{FOLDERID_RoamingAppData, SHGetKnownFolderPath, KF_FLAG_DEFAULT};
 
+use crate::backend::Feature;
 use crate::monitors::MonitorPath;
 use crate::Result;
 use crate::windowing::hotkey::{KeyCombination, Modifier, VirtualKey};
@@ -19,6 +20,8 @@ pub struct Config {
     pub dirty: bool,
     pub restore_from_config: bool,
     pub linked_brightness: bool,
+    pub show_volume: bool,
+    pub show_input: bool,
     pub use_prioritized_autostart: bool,
     pub icon_scoll_enabled: bool,
     pub icon_scroll_step_size: f32,
@@ -35,6 +38,8 @@ impl Default for Config {
             dirty: true,
             restore_from_config: true,
             linked_brightness: false,
+            show_volume: false,
+            show_input: false,
             use_prioritized_autostart: false,
             icon_scoll_enabled: false,
             icon_scroll_step_size: 5.0,
@@ -89,6 +94,18 @@ impl Config {
         Ok(())
     }
 
+    /// The monitor settings the flyout shows, which are also the only ones worth reading.
+    pub fn shown_features(&self) -> Vec<Feature> {
+        Feature::ALL
+            .into_iter()
+            .filter(|feature| match feature {
+                Feature::Volume => self.show_volume,
+                Feature::Input => self.show_input,
+                Feature::Power => false
+            })
+            .collect()
+    }
+
     pub fn monitor(&mut self, path: &MonitorPath) -> &mut MonitorSettings {
         self.monitors.entry(path.clone()).or_default()
     }
@@ -99,6 +116,8 @@ impl Config {
         write!(file, "[General]\r\n")?;
         write!(file, "RestoreFromConfig={}\r\n", self.restore_from_config)?;
         write!(file, "LinkedBrightness={}\r\n", self.linked_brightness)?;
+        write!(file, "ShowVolume={}\r\n", self.show_volume)?;
+        write!(file, "ShowInput={}\r\n", self.show_input)?;
         write!(file, "UsePrioritizedAutostart={}\r\n", self.use_prioritized_autostart)?;
         write!(file, "IconScrollEnabled={}\r\n", self.icon_scoll_enabled)?;
         write!(file, "IconScrollStepSize={}\r\n", self.icon_scroll_step_size)?;
@@ -161,6 +180,8 @@ impl Config {
                 "General" => match key {
                     "RestoreFromConfig" => self.restore_from_config = value.parse()?,
                     "LinkedBrightness" => self.linked_brightness = value.parse()?,
+                    "ShowVolume" => self.show_volume = value.parse()?,
+                    "ShowInput" => self.show_input = value.parse()?,
                     "UsePrioritizedAutostart" => self.use_prioritized_autostart = value.parse()?,
                     "IconScrollEnabled" => self.icon_scoll_enabled = value.parse()?,
                     "IconScrollStepSize" => self.icon_scroll_step_size = value.parse()?,

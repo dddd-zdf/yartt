@@ -173,6 +173,24 @@ impl SettingsWindow {
                 Ok(())
             }))?;
 
+        let feature_toggle = |text, field: fn(&mut Config) -> &mut bool| -> Result<StackPanel> {
+            let toggle = ToggleSwitch::new()?
+                .with_width(TOGGLE_WIDTH)?
+                .with_state(*field(&mut config.lock_no_poison()))?
+                .with_toggled_handler(cloned!([config, sender] move |ts| {
+                    let mut config = config.lock_no_poison();
+                    *field(&mut config) = ts.get_state()?;
+                    config.dirty = true;
+                    sender.send_ignore(CustomEvent::ShownFeaturesChanged);
+                    Ok(())
+                }))?;
+            StackPanel::horizontal()?
+                .with_child(&toggle)?
+                .with_child(&TextBlock::with_text(text)?.with_vertical_alignment(VerticalAlignment::Center)?)
+        };
+        let show_volume = feature_toggle("Show a volume slider for monitors with speakers", |c| &mut c.show_volume)?;
+        let show_input = feature_toggle("Show input selection for each monitor", |c| &mut c.show_input)?;
+
         let hotkey_increase = make_hotkey_editor(sender.clone(), config.clone(), |c| &mut c.brightness_increase_hotkey)?;
         let hotkey_decrease = make_hotkey_editor(sender.clone(), config.clone(), |c| &mut c.brightness_decrease_hotkey)?;
 
@@ -213,6 +231,8 @@ impl SettingsWindow {
             )?;
 
         let controls = section("Controls")?
+            .with_child(&show_volume)?
+            .with_child(&show_input)?
             .with_child(
             &StackPanel::horizontal()?
                 .with_child(&enable_icon_scroll)?

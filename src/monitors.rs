@@ -137,6 +137,15 @@ impl MonitorConnection {
         Ok(())
     }
 
+    /// The MCCS capabilities string, e.g. `(prot(monitor)type(lcd)vcp(10 12 60(0F 11 12))...)`.
+    pub fn get_capabilities(&self) -> Result<String> {
+        let mut len = 0;
+        BOOL(unsafe { GetCapabilitiesStringLength(self.handle, &mut len) }).ok()?;
+        let mut buf = vec![0u8; len as usize];
+        BOOL(unsafe { CapabilitiesRequestAndCapabilitiesReply(self.handle, &mut buf) }).ok()?;
+        Ok(String::from_utf8_lossy(&buf).trim_end_matches('\0').to_string())
+    }
+
     pub fn save_settings(&self) -> Result<()> {
         unsafe { BOOL(SaveCurrentMonitorSettings(self.handle)).ok()? };
         Ok(())

@@ -2,7 +2,7 @@ use windows::core::{ComInterface, TryIntoParam, HSTRING};
 use windows::Foundation::{EventHandler, IReference, Point, PropertyValue};
 use windows::Win32::UI::WindowsAndMessaging::WHEEL_DELTA;
 use windows_ext::UI::Xaml::Controls::Primitives::{FlyoutShowOptions, RangeBaseValueChangedEventArgs, RangeBaseValueChangedEventHandler};
-use windows_ext::UI::Xaml::Controls::{FlyoutPresenter, IconElement};
+use windows_ext::UI::Xaml::Controls::{FlyoutPresenter, IconElement, SelectionChangedEventHandler};
 use windows_ext::UI::Xaml::Input::PointerEventHandler;
 use windows_ext::UI::Xaml::{DependencyObject, RoutedEventHandler, TextWrapping, UIElement};
 
@@ -274,5 +274,55 @@ impl Flyout {
 
     pub fn close(&self) -> Result<()> {
         Ok(self.0.Hide()?)
+    }
+}
+
+new_type!(ComboBox, windows_ext::UI::Xaml::Controls::ComboBox);
+
+impl ComboBox {
+    pub fn new() -> Result<Self> {
+        let combo = <Self as NewType>::Inner::new()?;
+        Ok(Self(combo))
+    }
+
+    pub fn with_min_width(self, width: f64) -> Result<Self> {
+        self.0.SetMinWidth(width)?;
+        Ok(self)
+    }
+
+    pub fn with_placeholder<T: Into<HSTRING>>(self, text: T) -> Result<Self> {
+        self.0.SetPlaceholderText(&text.into())?;
+        Ok(self)
+    }
+
+    pub fn with_vertical_alignment(self, alignment: VerticalAlignment) -> Result<Self> {
+        self.0.SetVerticalAlignment(alignment)?;
+        Ok(self)
+    }
+
+    /// Called with the new selected index, or -1 when nothing is selected.
+    pub fn with_selection_changed_handler<F>(self, mut handler: F) -> Result<Self>
+    where
+        F: FnMut(i32) -> Result<()> + Send + 'static
+    {
+        self.0
+            .SelectionChanged(&SelectionChangedEventHandler::new(move |sender, _args| {
+                let combo = sender.some()?.cast::<<Self as NewType>::Inner>()?;
+                handler(combo.SelectedIndex()?).to_win_result()
+            }))?;
+        Ok(self)
+    }
+
+    pub fn set_items<T: Into<HSTRING>, I: IntoIterator<Item = T>>(&self, items: I) -> Result<()> {
+        let list = self.0.Items()?;
+        list.Clear()?;
+        for item in items {
+            list.Append(&PropertyValue::CreateString(&item.into())?)?;
+        }
+        Ok(())
+    }
+
+    pub fn set_selected_index(&self, index: i32) -> Result<()> {
+        Ok(self.0.SetSelectedIndex(index)?)
     }
 }

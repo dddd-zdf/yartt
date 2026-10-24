@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend;
+mod capabilities;
 mod config;
 mod monitors;
 pub mod runtime;
@@ -36,7 +37,7 @@ use crate::theme::{ColorSet, SystemSettings};
 pub use crate::utils::error::Result;
 use crate::utils::extensions::{ChannelExt, MutexExt};
 use crate::utils::{logger, panic};
-use crate::views::{BrightnessFlyout, ProxyWindow, SettingsWindow};
+use crate::views::{BrightnessFlyout, ProxyWindow, SettingsWindow, Shown};
 use crate::watchers::{EventWatcher, PowerEvent};
 use windowing::hotkey::HotKey;
 use crate::mousehook::{TrayIconScrollCallback};
@@ -59,10 +60,28 @@ pub enum CustomEvent {
     MonitorRenamed { path: MonitorPath, name: String },
     BrightnessChanged { path: MonitorPath, value: u32 },
     FeatureChanged { path: MonitorPath, feature: Feature, value: Option<FeatureValue> },
+    InputsFound { path: MonitorPath, inputs: Vec<u32> },
+    ScreenOff,
+    ShownFeaturesChanged,
     LinkedBrightnessChanged(u32),
     ToggleLinked,
     ChangeGeneralBrightness(f32),
     ReinitializeControls
+}
+
+/// Turns every display off the way Windows does after idling; any input wakes them again.
+fn screen_off() {
+    // Wait a moment, so the mouse movement after the click doesn't wake them right away
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(500));
+        unsafe {
+            use windows::Win32::Foundation::{LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, HWND_BROADCAST, SC_MONITORPOWER, WM_SYSCOMMAND};
+            // 2 = power off (1 would be low power)
+            PostMessageW(HWND_BROADCAST, WM_SYSCOMMAND, WPARAM(SC_MONITORPOWER as usize), LPARAM(2))
+                .unwrap_or_else(|err| warn!("Failed to turn off the screens: {err}"));
+        }
+    });
 }
 
 fn run() -> Result<()> {
@@ -134,8 +153,11 @@ fn run() -> Result<()> {
     })))?;
 
     let proxy_window = ProxyWindow::new()?;
-    let linked = config.lock_no_poison().linked_brightness;
-    let mut flyout = BrightnessFlyout::new(wnd_sender.clone(), &colors, linked)?;
+    let (linked, shown) = {
+        let lock = config.lock_no_poison();
+        (lock.linked_brightness, Shown { volume: lock.show_volume, input: lock.show_input })
+    };
+    let mut flyout = BrightnessFlyout::new(wnd_sender.clone(), &colors, linked, shown)?;
     let mut settings_window: Option<SettingsWindow> = None;
 
     if settings_mode {
@@ -281,8 +303,22 @@ fn run() -> Result<()> {
                     flyout.update_brightness(path, value)?;
                 }
                 CustomEvent::FeatureChanged { path, feature, value } => {
-                    // Not shown in the flyout yet
                     debug!("{:?} of {:?}: {:?}", feature, path, value);
+                    flyout.update_feature(&path, feature, value)?;
+                }
+                CustomEvent::InputsFound { path, inputs } => {
+                    debug!("Inputs of {:?}: {:?}", path, inputs);
+                    flyout.set_inputs(&path, inputs)?;
+                }
+                CustomEvent::ShownFeaturesChanged => {
+                    let lock = config.lock_no_poison();
+                    flyout.set_shown(Shown { volume: lock.show_volume, input: lock.show_input })?;
+                    // Settings that were off were never read, so read them now
+                    controller.create_proxy().query_features(lock.shown_features());
+                }
+                CustomEvent::ScreenOff => {
+                    flyout.close();
+                    screen_off();
                 }
                 CustomEvent::LinkedBrightnessChanged(value) => {
                     flyout.set_all(value)?;

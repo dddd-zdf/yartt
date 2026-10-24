@@ -11,6 +11,7 @@ use log::{debug, trace, warn};
 use loole::{unbounded, Receiver, Sender};
 use windows::Win32::Foundation::ERROR_GRAPHICS_DDCCI_VCP_NOT_SUPPORTED;
 
+use crate::capabilities::vcp_values;
 use crate::config::Config;
 use crate::monitors::{Monitor, MonitorConnection, MonitorPath};
 use crate::runtime::reducing_spsc::{Reducible, ReducingReceiver, ReducingSender, TryRecvError};
@@ -26,7 +27,8 @@ enum BackendCommand {
     RefreshMonitorsIn(Duration),
     QueryBrightness(Option<Duration>),
     SetBrightness(MonitorPath, u32),
-    Feature(MonitorPath, Feature, FeatureCommand)
+    Feature(MonitorPath, Feature, FeatureCommand),
+    QueryFeatures(Vec<Feature>)
 }
 
 pub struct MonitorController {
@@ -110,9 +112,10 @@ impl MonitorController {
                                     });
                                 }
                                 let (tx, rx) = reducing_spsc::channel();
-                                if !old_monitors.contains(&path) {
+                                let shown = config.lock_no_poison().shown_features();
+                                if !old_monitors.contains(&path) && !shown.is_empty() {
                                     // Queued behind the brightness restore, which matters more at startup
-                                    tx.send_ignore(MonitorCommand::query_features());
+                                    tx.send_ignore(MonitorCommand::query_features(&shown));
                                 }
                                 executor.spawn(monitor_task(monitor, sender.clone(), rx));
                                 monitor_map.insert(path, tx);
@@ -142,6 +145,11 @@ impl MonitorController {
                                 config.monitors.entry(p).or_default().saved_brightness = Some(v);
                                 config.dirty = true;
                             }
+                        }
+                        BackendCommand::QueryFeatures(features) => {
+                            monitor_map
+                                .values()
+                                .for_each(|s| s.send_ignore(MonitorCommand::query_features(&features)));
                         }
                         BackendCommand::Feature(p, feature, command) => {
                             monitor_map
@@ -267,11 +275,12 @@ impl MonitorCommand {
         result
     }
 
-    fn query_features() -> Self {
-        Self {
-            features: [Some(FeatureCommand::Query); Feature::ALL.len()],
-            ..Default::default()
+    fn query_features(features: &[Feature]) -> Self {
+        let mut result = Self::default();
+        for &feature in features {
+            result.features[feature as usize] = Some(FeatureCommand::Query);
         }
+        result
     }
 
     fn is_empty(&self) -> bool {
@@ -302,6 +311,7 @@ impl Reducible for MonitorCommand {
 async fn monitor_task(monitor: Monitor, sender: Sender<CustomEvent>, mut control: ReducingReceiver<MonitorCommand>) {
     let mut current_brightness = None;
     let mut feature_values: [Option<FeatureValue>; Feature::ALL.len()] = Default::default();
+    let mut inputs_read = false;
     let mut cached_connection: Option<MonitorConnection> = None;
 
     let mut next_command = None;
@@ -399,6 +409,24 @@ async fn monitor_task(monitor: Monitor, sender: Sender<CustomEvent>, mut control
                 }
             }
         }
+        if command.features[Feature::Input as usize] == Some(FeatureCommand::Query) && !inputs_read {
+            // The input list only comes from the capabilities string, which is slow to read, so once is enough
+            inputs_read = true;
+            match retry(|| connection.get_capabilities()).await {
+                Ok(caps) => {
+                    let mut inputs = vcp_values(&caps, Feature::Input.vcp_code()).unwrap_or_default();
+                    // Some monitors list 0, which isn't an input
+                    inputs.retain(|&v| v != 0);
+                    if !inputs.is_empty() {
+                        sender.send_ignore(CustomEvent::InputsFound {
+                            path: monitor.path().clone(),
+                            inputs
+                        });
+                    }
+                }
+                Err(err) => debug!("No capabilities from {}: {err}", monitor.name())
+            }
+        }
         for (feature, pending) in Feature::ALL.into_iter().zip(command.features) {
             let known = &mut feature_values[feature as usize];
             match pending {
@@ -410,6 +438,10 @@ async fn monitor_task(monitor: Monitor, sender: Sender<CustomEvent>, mut control
                         .map(|(current, max)| FeatureValue { current, max })
                         .map_err(|err| debug!("{:?} unavailable on {}: {err}", feature, monitor.name()))
                         .ok();
+                }
+                Some(FeatureCommand::Set(value)) if known.map(|v| v.current) == Some(value) => {
+                    trace!("{:?} of {} already at {}", feature, monitor.name(), value);
+                    continue;
                 }
                 Some(FeatureCommand::Set(value)) => {
                     trace!("Attempting to set {:?} of {} to {}", feature, monitor.name(), value);
@@ -468,6 +500,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct MonitorControllerProxy(Sender<BackendCommand>);
 
 impl MonitorControllerProxy {
@@ -475,8 +508,9 @@ impl MonitorControllerProxy {
         self.send_command(BackendCommand::SetBrightness(monitor, value));
     }
 
-    pub fn query_feature(&self, monitor: MonitorPath, feature: Feature) {
-        self.send_command(BackendCommand::Feature(monitor, feature, FeatureCommand::Query));
+    /// Reads these settings from every monitor, e.g. once they're turned on in the settings.
+    pub fn query_features(&self, features: Vec<Feature>) {
+        self.send_command(BackendCommand::QueryFeatures(features));
     }
 
     pub fn set_feature(&self, monitor: MonitorPath, feature: Feature, value: u32) {

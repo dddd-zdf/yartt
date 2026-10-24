@@ -5,6 +5,15 @@ YARTT (Yet Another Rusty Twinkle Tray), forked from
 
 ## Unreleased
 
+- Flyout rows for volume and input under each monitor, shown only when the monitor supports
+  them. The input list comes from the monitor's capabilities string, read once per monitor.
+  While linked, each monitor still shows its own volume and input below the shared slider.
+- Both rows are off by default: turn them on in Settings > Controls ("Show a volume slider…",
+  "Show input selection…", saved as `ShowVolume` / `ShowInput`). While off, the app doesn't read
+  them from the monitors at all. Difei: turn them on if you want them.
+- Screen off button in the bottom bar: turns every display off the way Windows does when idle
+  (any mouse or key input wakes them).
+- Volume and input writes are skipped when the monitor already has that value.
 - Linked monitors: a Link button in the flyout's bottom bar. While linked, the flyout shows one
   "All monitors" slider in place of the per-monitor ones, and tray scroll and hotkeys move that
   slider. Turning it on brings every monitor to the first one's level. Saved as

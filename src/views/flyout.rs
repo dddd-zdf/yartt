@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use log::{debug, warn};
 use loole::Sender;
@@ -12,13 +12,14 @@ use windows_ext::UI::Xaml::Controls::Primitives::FlyoutPlacementMode;
 use windows_ext::UI::Xaml::Media::{AcrylicBackgroundSource, AcrylicBrush, SolidColorBrush};
 use windows_ext::UI::Xaml::{TextAlignment, VerticalAlignment};
 
-use crate::backend::MonitorControllerProxy;
+use crate::backend::{Feature, FeatureValue, MonitorControllerProxy};
+use crate::capabilities::input_name;
 use crate::monitors::MonitorPath;
 use crate::theme::ColorSet;
 use crate::ui::container::{Grid, GridSize, StackPanel};
-use crate::ui::controls::{AppBarButton, Flyout, FontIcon, Slider, TextBlock};
+use crate::ui::controls::{AppBarButton, ComboBox, Flyout, FontIcon, Slider, TextBlock};
 use crate::ui::FontWeight;
-use crate::utils::extensions::ChannelExt;
+use crate::utils::extensions::{ChannelExt, MutexExt};
 use crate::utils::ordered_map::{OrderedMap, SortKeyExtract};
 use crate::windowing::{Window, WindowBuilder, WindowLevel};
 use crate::{cloned, hformat, log_assert, CustomEvent, Result};
@@ -62,8 +63,9 @@ pub struct BrightnessFlyout {
     container: StackPanel,
     link_button: AppBarButton,
     linked: Cell<bool>,
+    shown: Cell<Shown>,
     /// One slider for every monitor, shown instead of the per-monitor ones while linked
-    linked_row: BrightnessRow,
+    linked_row: LinkedRow,
     /// Set while the flyout moves the linked slider itself, so that isn't sent to the monitors
     linked_suppress: Arc<AtomicBool>,
 
@@ -74,12 +76,20 @@ pub struct BrightnessFlyout {
 impl BrightnessFlyout {
     const WIDTH: f64 = 400.0;
 
-    pub fn new(sender: Sender<CustomEvent>, colors: &ColorSet, linked: bool) -> Result<Self> {
+    pub fn new(sender: Sender<CustomEvent>, colors: &ColorSet, linked: bool, shown: Shown) -> Result<Self> {
         let link_button = AppBarButton::new()?
             .with_icon(&FontIcon::new('\u{E71B}')?)?
             .with_label(Self::link_label(linked))?
             .with_click_handler(cloned!([sender] move || {
                 sender.send_ignore(CustomEvent::ToggleLinked);
+                Ok(())
+            }))?;
+
+        let screen_off = AppBarButton::new()?
+            .with_icon(&FontIcon::new('\u{E7E8}')?)?
+            .with_label("Screen off")?
+            .with_click_handler(cloned!([sender] move || {
+                sender.send_ignore(CustomEvent::ScreenOff);
                 Ok(())
             }))?;
 
@@ -119,6 +129,7 @@ impl BrightnessFlyout {
             )?
             .with_child(
                 &StackPanel::horizontal()?
+                    .with_child(&screen_off)?
                     .with_child(&link_button)?
                     .with_child(&refresh)?
                     .with_child(&settings)?,
@@ -162,7 +173,7 @@ impl BrightnessFlyout {
             }))?;
 
         let linked_suppress = Arc::new(AtomicBool::new(false));
-        let linked_row = BrightnessRow::create('\u{E71B}', "All monitors", {
+        let linked_row = LinkedRow::create({
             let suppress = linked_suppress.clone();
             move |value| {
                 if !suppress.load(Ordering::Relaxed) {
@@ -177,6 +188,7 @@ impl BrightnessFlyout {
             container,
             link_button,
             linked: Cell::new(linked),
+            shown: Cell::new(shown),
             linked_row,
             linked_suppress,
             monitor_panel,
@@ -198,7 +210,7 @@ impl BrightnessFlyout {
         self.link_button.set_label(Self::link_label(linked))?;
         if linked {
             if let Some(first) = self.monitor_controls.values().next() {
-                let value = first.row.slider.get_value()? as u32;
+                let value = first.brightness.slider.get_value()? as u32;
                 self.set_linked_slider(value)?;
                 self.set_all(value)?;
             }
@@ -261,10 +273,14 @@ impl BrightnessFlyout {
 
     fn repopulate_monitor_list(&self) -> Result<()> {
         self.monitor_panel.clear_children()?;
-        if self.linked.get() && !self.monitor_controls.is_empty() {
+        let linked = self.linked.get() && !self.monitor_controls.is_empty();
+        if linked {
             self.monitor_panel.add_child(&self.linked_row.ui)?;
-        } else {
-            for monitor in self.monitor_controls.values() {
+        }
+        for monitor in self.monitor_controls.values() {
+            monitor.layout(linked, self.shown.get())?;
+            // While linked, a monitor with nothing but brightness has nothing left to show
+            if !linked || monitor.has_features(self.shown.get()) {
                 self.monitor_panel.add_child(monitor.ui())?;
             }
         }
@@ -314,6 +330,35 @@ impl BrightnessFlyout {
         Ok(())
     }
 
+    pub fn set_shown(&self, shown: Shown) -> Result<()> {
+        self.shown.set(shown);
+        self.repopulate_monitor_list()
+    }
+
+    pub fn update_feature(&self, path: &MonitorPath, feature: Feature, value: Option<FeatureValue>) -> Result<()> {
+        match self.monitor_controls.get(path) {
+            None => warn!("Monitor is not registered: {:?}", path),
+            Some(entry) => {
+                if entry.update_feature(feature, value)? {
+                    self.repopulate_monitor_list()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn set_inputs(&self, path: &MonitorPath, inputs: Vec<u32>) -> Result<()> {
+        match self.monitor_controls.get(path) {
+            None => warn!("Monitor is not registered: {:?}", path),
+            Some(entry) => {
+                if entry.set_inputs(inputs)? {
+                    self.repopulate_monitor_list()?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn change_brightness(&self, delta: i32) -> Result<()> {
         if self.linked.get() {
             let slider = &self.linked_row.slider;
@@ -326,22 +371,36 @@ impl BrightnessFlyout {
     }
 }
 
-/// An icon and name above a brightness slider with its value.
-struct BrightnessRow {
-    ui: StackPanel,
-    slider: Slider,
-    name_label: TextBlock
+/// Which optional rows the settings turned on.
+#[derive(Debug, Copy, Clone, Default)]
+pub struct Shown {
+    pub volume: bool,
+    pub input: bool
 }
 
-impl BrightnessRow {
-    fn create(icon: char, name: &str, mut on_change: impl FnMut(u32) + Send + 'static) -> Result<Self> {
+/// An icon and a name, the title line of a monitor or of the linked slider.
+fn header(icon: char, name: &str) -> Result<(StackPanel, TextBlock)> {
+    let name_label = TextBlock::with_text(name)?.with_font_size(20.0)?;
+    let ui = StackPanel::horizontal()?
+        .with_spacing(8.0)?
+        .with_child(&FontIcon::new(icon)?.with_font_weight(FontWeight::Medium)?)?
+        .with_child(&name_label)?;
+    Ok((ui, name_label))
+}
+
+/// A slider with its value next to it, optionally led by an icon.
+struct SliderRow {
+    ui: Grid,
+    slider: Slider
+}
+
+impl SliderRow {
+    fn create(icon: Option<char>, font_size: f64, mut on_change: impl FnMut(u32) + Send + 'static) -> Result<Self> {
         let label = TextBlock::new()?
             .with_vertical_alignment(VerticalAlignment::Center)?
             .with_text_alignment(TextAlignment::Center)?
-            .with_font_size(20.0)?
+            .with_font_size(font_size)?
             .with_font_weight(FontWeight::Medium)?;
-
-        let name_label = TextBlock::with_text(name)?.with_font_size(20.0)?;
 
         let slider = Slider::new()?
             .with_vertical_alignment(VerticalAlignment::Center)?
@@ -356,51 +415,181 @@ impl BrightnessRow {
 
         label.set_text(hformat!("{}", slider.get_value()?))?;
 
+        let ui = match icon {
+            Some(icon) => Grid::new()?
+                .with_column_widths([GridSize::Pixel(28.0), GridSize::Fraction(1.0), GridSize::Pixel(40.0)])?
+                .with_column_spacing(8.0)?
+                .with_child(&FontIcon::new(icon)?.with_vertical_alignment(VerticalAlignment::Center)?, 0, 0)?
+                .with_child(&slider, 0, 1)?
+                .with_child(&label, 0, 2)?,
+            None => Grid::new()?
+                .with_column_widths([GridSize::Fraction(1.0), GridSize::Pixel(40.0)])?
+                .with_column_spacing(8.0)?
+                .with_child(&slider, 0, 0)?
+                .with_child(&label, 0, 1)?
+        };
+
+        Ok(Self { ui, slider })
+    }
+}
+
+/// The "All monitors" slider shown while linked.
+struct LinkedRow {
+    ui: StackPanel,
+    slider: Slider
+}
+
+impl LinkedRow {
+    fn create(on_change: impl FnMut(u32) + Send + 'static) -> Result<Self> {
+        let (title, _) = header('\u{E71B}', "All monitors")?;
+        let row = SliderRow::create(None, 20.0, on_change)?;
         let ui = StackPanel::vertical()?
             .with_spacing(4.0)?
-            .with_child(
-                &StackPanel::horizontal()?
-                    .with_spacing(8.0)?
-                    .with_child(&FontIcon::new(icon)?.with_font_weight(FontWeight::Medium)?)?
-                    .with_child(&name_label)?
-            )?
-            .with_child(
-                &Grid::new()?
-                    .with_column_widths([GridSize::Fraction(1.0), GridSize::Pixel(40.0)])?
-                    .with_column_spacing(8.0)?
-                    .with_child(&slider, 0, 0)?
-                    .with_child(&label, 0, 1)?
-            )?;
-
-        Ok(Self { ui, slider, name_label })
+            .with_child(&title)?
+            .with_child(&row.ui)?;
+        Ok(Self { ui, slider: row.slider })
     }
 }
 
 struct MonitorEntry {
     position: i32,
-    row: BrightnessRow
+    ui: StackPanel,
+    title: StackPanel,
+    name_label: TextBlock,
+    brightness: SliderRow,
+    volume: SliderRow,
+    has_volume: Cell<bool>,
+    input_row: Grid,
+    input_box: ComboBox,
+    /// Input values the monitor lists, in the order shown in `input_box`
+    inputs: Arc<Mutex<Vec<u32>>>,
+    current_input: Cell<Option<u32>>
 }
 
 impl MonitorEntry {
     fn create(name: String, path: MonitorPath, position: i32, proxy: MonitorControllerProxy) -> Result<Self> {
-        let row = BrightnessRow::create('\u{E7f4}', &name, move |value| proxy.set_brightness(path.clone(), value))?;
-        Ok(Self { position, row })
+        let (title, name_label) = header('\u{E7f4}', &name)?;
+
+        let brightness = SliderRow::create(None, 20.0, cloned!([proxy, path] move |value| proxy.set_brightness(path.clone(), value)))?;
+        let volume = SliderRow::create(
+            Some('\u{E767}'),
+            15.0,
+            cloned!([proxy, path] move |value| proxy.set_feature(path.clone(), Feature::Volume, value))
+        )?;
+
+        // Filled in once the monitor's input list arrives; the handler maps an index back to its value
+        let inputs = Arc::new(Mutex::new(Vec::<u32>::new()));
+        let input_box = ComboBox::new()?
+            .with_min_width(160.0)?
+            .with_placeholder("Input")?
+            .with_vertical_alignment(VerticalAlignment::Center)?
+            .with_selection_changed_handler(cloned!([inputs] move |index| {
+                let value = usize::try_from(index)
+                    .ok()
+                    .and_then(|i| inputs.lock_no_poison().get(i).copied());
+                if let Some(value) = value {
+                    proxy.set_feature(path.clone(), Feature::Input, value);
+                }
+                Ok(())
+            }))?;
+        let input_row = Grid::new()?
+            .with_column_widths([GridSize::Pixel(28.0), GridSize::Fraction(1.0)])?
+            .with_column_spacing(8.0)?
+            .with_child(&FontIcon::new('\u{E8B9}')?.with_vertical_alignment(VerticalAlignment::Center)?, 0, 0)?
+            .with_child(&input_box, 0, 1)?;
+
+        Ok(Self {
+            position,
+            ui: StackPanel::vertical()?.with_spacing(4.0)?,
+            title,
+            name_label,
+            brightness,
+            volume,
+            has_volume: Cell::new(false),
+            input_row,
+            input_box,
+            inputs,
+            current_input: Cell::new(None)
+        })
+    }
+
+    /// Lays out the rows this monitor has. While linked the brightness slider is left out,
+    /// since the shared one replaces it.
+    fn layout(&self, linked: bool, shown: Shown) -> Result<()> {
+        self.ui.clear_children()?;
+        self.ui.add_child(&self.title)?;
+        if !linked {
+            self.ui.add_child(&self.brightness.ui)?;
+        }
+        if shown.volume && self.has_volume.get() {
+            self.ui.add_child(&self.volume.ui)?;
+        }
+        if shown.input && !self.inputs.lock_no_poison().is_empty() {
+            self.ui.add_child(&self.input_row)?;
+        }
+        Ok(())
+    }
+
+    /// Whether anything besides brightness can be shown.
+    fn has_features(&self, shown: Shown) -> bool {
+        (shown.volume && self.has_volume.get()) || (shown.input && !self.inputs.lock_no_poison().is_empty())
     }
 
     pub fn set_name(&self, name: &str) -> Result<()> {
-        self.row.name_label.set_text(name)
+        self.name_label.set_text(name)
     }
 
     pub fn set_brightness(&self, value: u32) -> Result<()> {
-        self.row.slider.set_value(value as f64)
+        self.brightness.slider.set_value(value as f64)
     }
 
     pub fn change_brightness(&self, value: i32) -> Result<()> {
-        self.row.slider.set_value(self.row.slider.get_value()? + value as f64)
+        self.brightness
+            .slider
+            .set_value(self.brightness.slider.get_value()? + value as f64)
+    }
+
+    /// Returns whether the set of rows changed.
+    fn update_feature(&self, feature: Feature, value: Option<FeatureValue>) -> Result<bool> {
+        match feature {
+            Feature::Volume => {
+                let changed = self.has_volume.replace(value.is_some()) != value.is_some();
+                if let Some(value) = value {
+                    self.volume.slider.set_value(value.current as f64)?;
+                }
+                Ok(changed)
+            }
+            Feature::Input => {
+                self.current_input.set(value.map(|v| v.current));
+                self.select_current_input()?;
+                Ok(false)
+            }
+            Feature::Power => Ok(false)
+        }
+    }
+
+    /// Returns whether the set of rows changed.
+    fn set_inputs(&self, inputs: Vec<u32>) -> Result<bool> {
+        let names: Vec<String> = inputs.iter().map(|&v| input_name(v)).collect();
+        let was_empty = std::mem::replace(&mut *self.inputs.lock_no_poison(), inputs).is_empty();
+        // The lock must be released here: filling the box fires the selection handler, which takes it
+        self.input_box.set_items(names)?;
+        self.select_current_input()?;
+        Ok(was_empty != self.inputs.lock_no_poison().is_empty())
+    }
+
+    fn select_current_input(&self) -> Result<()> {
+        // Some monitors report a current input that isn't in their own list (the LG says 0)
+        let index = self
+            .current_input
+            .get()
+            .and_then(|current| self.inputs.lock_no_poison().iter().position(|&v| v == current));
+        self.input_box
+            .set_selected_index(index.map_or(-1, |i| i as i32))
     }
 
     pub fn ui(&self) -> &StackPanel {
-        &self.row.ui
+        &self.ui
     }
 }
 
