@@ -90,6 +90,7 @@ Flyout = true
 AppBarButton = true
 ToggleSwitch = true
 ComboBox = true
+ScrollViewer = true
 ItemCollection = ["Append", "Clear", "Size"]
 SelectionChangedEventHandler = true
 SelectionChangedEventArgs = true
