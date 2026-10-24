@@ -71,6 +71,13 @@ impl TracedError {
         }
     }
 
+    pub fn code(&self) -> Option<HRESULT> {
+        match &self.inner {
+            InnerError::Win(err) => Some(err.code()),
+            _ => None
+        }
+    }
+
     pub fn trace(&self) -> &Trace {
         &self.backtrace
     }

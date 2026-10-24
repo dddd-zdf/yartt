@@ -28,7 +28,7 @@ use windows::UI::ViewManagement::UISettings;
 use windows_ext::UI::Xaml::ElementTheme;
 use windows_ext::UI::Xaml::Hosting::WindowsXamlManager;
 
-use crate::backend::MonitorController;
+use crate::backend::{Feature, FeatureValue, MonitorController};
 use crate::config::{autostart, Config};
 use crate::monitors::MonitorPath;
 use crate::runtime::{FutureStream, Timer};
@@ -58,6 +58,7 @@ pub enum CustomEvent {
     MonitorRemoved { path: MonitorPath },
     MonitorRenamed { path: MonitorPath, name: String },
     BrightnessChanged { path: MonitorPath, value: u32 },
+    FeatureChanged { path: MonitorPath, feature: Feature, value: Option<FeatureValue> },
     ChangeGeneralBrightness(f32),
     ReinitializeControls
 }
@@ -273,6 +274,10 @@ fn run() -> Result<()> {
                 }
                 CustomEvent::BrightnessChanged { path, value } => {
                     flyout.update_brightness(path, value)?;
+                }
+                CustomEvent::FeatureChanged { path, feature, value } => {
+                    // Not shown in the flyout yet
+                    debug!("{:?} of {:?}: {:?}", feature, path, value);
                 }
                 CustomEvent::ChangeGeneralBrightness(value) => {
                     flyout.change_brightness(value.round() as i32)?;

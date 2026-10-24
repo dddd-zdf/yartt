@@ -124,6 +124,19 @@ impl MonitorConnection {
         Ok(())
     }
     
+    /// Reads a raw VCP code, returning (current, max).
+    pub fn get_vcp(&self, code: u8) -> Result<(u32, u32)> {
+        let mut cur = 0;
+        let mut max = 0;
+        unsafe { BOOL(GetVCPFeatureAndVCPFeatureReply(self.handle, code, None, &mut cur, Some(&mut max))).ok()? };
+        Ok((cur, max))
+    }
+
+    pub fn set_vcp(&self, code: u8, value: u32) -> Result<()> {
+        unsafe { BOOL(SetVCPFeature(self.handle, code, value)).ok()? };
+        Ok(())
+    }
+
     pub fn save_settings(&self) -> Result<()> {
         unsafe { BOOL(SaveCurrentMonitorSettings(self.handle)).ok()? };
         Ok(())
@@ -136,7 +149,9 @@ mod tests {
     use super::*;
     use crate::utils::error::Result;
 
+    // Talks to real monitors and drops their brightness to the minimum, so run it by name only
     #[test]
+    #[ignore]
     fn caps() -> Result<()> {
         for monitor in Monitor::find_all()? {
             println!("{}", monitor.name());
@@ -145,6 +160,26 @@ mod tests {
             println!("\tbrightness: {} / {}-{}", current, range.start(), range.end());
             conn.set_brightness(*range.start())?;
             //println!("\tcaps: {:?}", conn.get_capabilities()?);
+        }
+        Ok(())
+    }
+
+    // Writes each monitor's current volume back unchanged, to exercise the VCP write path
+    #[test]
+    #[ignore]
+    fn vcp_volume_roundtrip() -> Result<()> {
+        for monitor in Monitor::find_all()? {
+            let conn = monitor.open()?;
+            match conn.get_vcp(0x62) {
+                Ok((current, max)) => {
+                    conn.set_vcp(0x62, current)?;
+                    // Monitors need a moment after a write before they answer again
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    assert_eq!(conn.get_vcp(0x62)?.0, current);
+                    println!("{}: volume {} / {} written back", monitor.name(), current, max);
+                }
+                Err(err) => println!("{}: no volume ({})", monitor.name(), err.message())
+            }
         }
         Ok(())
     }
