@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -55,31 +56,16 @@ impl ProxyWindow {
     }
 }
 
-/// Shared by the flyout and every slider handler.
-#[derive(Default)]
-struct LinkState {
-    linked: AtomicBool,
-    /// Set while the flyout moves sliders itself (backend updates, linked syncs), so those
-    /// moves don't get passed on to the other monitors again.
-    suppress: AtomicBool
-}
-
-impl LinkState {
-    fn suppressed<R>(&self, f: impl FnOnce() -> R) -> R {
-        self.suppress.store(true, Ordering::Relaxed);
-        let result = f();
-        self.suppress.store(false, Ordering::Relaxed);
-        result
-    }
-}
-
 pub struct BrightnessFlyout {
     flyout: Flyout,
     background: AcrylicBrush,
     container: StackPanel,
     link_button: AppBarButton,
-    link: Arc<LinkState>,
-    sender: Sender<CustomEvent>,
+    linked: Cell<bool>,
+    /// One slider for every monitor, shown instead of the per-monitor ones while linked
+    linked_row: BrightnessRow,
+    /// Set while the flyout moves the linked slider itself, so that isn't sent to the monitors
+    linked_suppress: Arc<AtomicBool>,
 
     monitor_panel: StackPanel,
     monitor_controls: OrderedMap<MonitorPath, MonitorEntry>
@@ -175,16 +161,24 @@ impl BrightnessFlyout {
                 Ok(())
             }))?;
 
-        let link = Arc::new(LinkState::default());
-        link.linked.store(linked, Ordering::Relaxed);
+        let linked_suppress = Arc::new(AtomicBool::new(false));
+        let linked_row = BrightnessRow::create('\u{E71B}', "All monitors", {
+            let suppress = linked_suppress.clone();
+            move |value| {
+                if !suppress.load(Ordering::Relaxed) {
+                    sender.send_ignore(CustomEvent::LinkedBrightnessChanged(value));
+                }
+            }
+        })?;
 
         Ok(Self {
             flyout,
             background,
             container,
             link_button,
-            link,
-            sender,
+            linked: Cell::new(linked),
+            linked_row,
+            linked_suppress,
             monitor_panel,
             monitor_controls: OrderedMap::new()
         })
@@ -200,29 +194,31 @@ impl BrightnessFlyout {
 
     /// Turning linking on brings every monitor to the level of the first one.
     pub fn set_linked(&self, linked: bool) -> Result<()> {
-        self.link.linked.store(linked, Ordering::Relaxed);
+        self.linked.set(linked);
         self.link_button.set_label(Self::link_label(linked))?;
-        if let Some((path, entry)) = self.monitor_controls.iter().next() {
-            if linked {
-                self.sync_linked(path, entry.slider.get_value()? as u32)?;
+        if linked {
+            if let Some(first) = self.monitor_controls.values().next() {
+                let value = first.row.slider.get_value()? as u32;
+                self.set_linked_slider(value)?;
+                self.set_all(value)?;
             }
         }
-        Ok(())
+        self.repopulate_monitor_list()
     }
 
-    /// Moves every other slider to `value` after the user moved the one for `source`.
-    pub fn sync_linked(&self, source: &MonitorPath, value: u32) -> Result<()> {
-        if !self.link.linked.load(Ordering::Relaxed) {
-            return Ok(());
-        }
-        self.link.suppressed(|| {
-            for (path, entry) in self.monitor_controls.iter() {
-                if path != source {
-                    entry.set_brightness(value)?;
-                }
-            }
-            Ok(())
-        })
+    /// Sends one level to every monitor, from the linked slider.
+    pub fn set_all(&self, value: u32) -> Result<()> {
+        // The per-monitor sliders are hidden while linked, but they still pass the value on
+        self.monitor_controls
+            .values()
+            .try_for_each(|entry| entry.set_brightness(value))
+    }
+
+    fn set_linked_slider(&self, value: u32) -> Result<()> {
+        self.linked_suppress.store(true, Ordering::Relaxed);
+        let result = self.linked_row.slider.set_value(value as f64);
+        self.linked_suppress.store(false, Ordering::Relaxed);
+        result
     }
 
     pub fn update_theme(&self, colors: &ColorSet) -> Result<()> {
@@ -265,8 +261,12 @@ impl BrightnessFlyout {
 
     fn repopulate_monitor_list(&self) -> Result<()> {
         self.monitor_panel.clear_children()?;
-        for monitor in self.monitor_controls.values() {
-            self.monitor_panel.add_child(monitor.ui())?;
+        if self.linked.get() && !self.monitor_controls.is_empty() {
+            self.monitor_panel.add_child(&self.linked_row.ui)?;
+        } else {
+            for monitor in self.monitor_controls.values() {
+                self.monitor_panel.add_child(monitor.ui())?;
+            }
         }
         Ok(())
     }
@@ -274,7 +274,7 @@ impl BrightnessFlyout {
     pub fn register_monitor(&mut self, name: String, path: MonitorPath, position: i32, proxy: MonitorControllerProxy) -> Result<()> {
         log_assert!(self
             .monitor_controls
-            .insert(path.clone(), MonitorEntry::create(name, path, position, proxy, self.sender.clone(), self.link.clone())?)
+            .insert(path.clone(), MonitorEntry::create(name, path, position, proxy)?)
             .is_none());
         self.repopulate_monitor_list()?;
         Ok(())
@@ -301,25 +301,23 @@ impl BrightnessFlyout {
     }
 
     pub fn update_brightness(&self, path: MonitorPath, new_brightness: u32) -> Result<()> {
-        match self.monitor_controls.get(&path) {
+        match self.monitor_controls.iter().position(|(p, _)| *p == path) {
             None => warn!("Monitor is not registered: {:?}", path),
-            // Each monitor reports its own level; that shouldn't drag the others along
-            Some(entry) => self.link.suppressed(|| entry.set_brightness(new_brightness))?
+            Some(index) => {
+                self.monitor_controls.get(&path).unwrap().set_brightness(new_brightness)?;
+                // The linked slider follows the first monitor
+                if self.linked.get() && index == 0 {
+                    self.set_linked_slider(new_brightness)?;
+                }
+            }
         }
         Ok(())
     }
 
     pub fn change_brightness(&self, delta: i32) -> Result<()> {
-        if self.link.linked.load(Ordering::Relaxed) {
-            // Step from one shared level, or monitors that started apart would stay apart
-            if let Some(first) = self.monitor_controls.values().next() {
-                let target = (first.slider.get_value()? + delta as f64).clamp(0.0, 100.0) as u32;
-                return self.link.suppressed(|| {
-                    self.monitor_controls
-                        .values()
-                        .try_for_each(|entry| entry.set_brightness(target))
-                });
-            }
+        if self.linked.get() {
+            let slider = &self.linked_row.slider;
+            return slider.set_value(slider.get_value()? + delta as f64);
         }
         for entry in self.monitor_controls.values() {
             entry.change_brightness(delta)?;
@@ -328,25 +326,22 @@ impl BrightnessFlyout {
     }
 }
 
-struct MonitorEntry {
-    position: i32,
+/// An icon and name above a brightness slider with its value.
+struct BrightnessRow {
     ui: StackPanel,
     slider: Slider,
     name_label: TextBlock
 }
 
-impl MonitorEntry {
-    fn create(
-        name: String, path: MonitorPath, position: i32, proxy: MonitorControllerProxy, sender: Sender<CustomEvent>,
-        link: Arc<LinkState>
-    ) -> Result<Self> {
+impl BrightnessRow {
+    fn create(icon: char, name: &str, mut on_change: impl FnMut(u32) + Send + 'static) -> Result<Self> {
         let label = TextBlock::new()?
             .with_vertical_alignment(VerticalAlignment::Center)?
             .with_text_alignment(TextAlignment::Center)?
             .with_font_size(20.0)?
             .with_font_weight(FontWeight::Medium)?;
 
-        let name_label = TextBlock::with_text(&name)?.with_font_size(20.0)?;
+        let name_label = TextBlock::with_text(name)?.with_font_size(20.0)?;
 
         let slider = Slider::new()?
             .with_vertical_alignment(VerticalAlignment::Center)?
@@ -355,10 +350,7 @@ impl MonitorEntry {
             .with_value_changed_handler(cloned!([label] move |args| {
                 let new = args.NewValue()? as u32;
                 label.set_text(hformat!("{}", new))?;
-                proxy.set_brightness(path.clone(), new);
-                if link.linked.load(Ordering::Relaxed) && !link.suppress.load(Ordering::Relaxed) {
-                    sender.send_ignore(CustomEvent::LinkedBrightnessChanged { path: path.clone(), value: new });
-                }
+                on_change(new);
                 Ok(())
             }))?;
 
@@ -369,7 +361,7 @@ impl MonitorEntry {
             .with_child(
                 &StackPanel::horizontal()?
                     .with_spacing(8.0)?
-                    .with_child(&FontIcon::new('\u{E7f4}')?.with_font_weight(FontWeight::Medium)?)?
+                    .with_child(&FontIcon::new(icon)?.with_font_weight(FontWeight::Medium)?)?
                     .with_child(&name_label)?
             )?
             .with_child(
@@ -380,23 +372,35 @@ impl MonitorEntry {
                     .with_child(&label, 0, 1)?
             )?;
 
-        Ok(Self { position, ui, slider, name_label })
+        Ok(Self { ui, slider, name_label })
+    }
+}
+
+struct MonitorEntry {
+    position: i32,
+    row: BrightnessRow
+}
+
+impl MonitorEntry {
+    fn create(name: String, path: MonitorPath, position: i32, proxy: MonitorControllerProxy) -> Result<Self> {
+        let row = BrightnessRow::create('\u{E7f4}', &name, move |value| proxy.set_brightness(path.clone(), value))?;
+        Ok(Self { position, row })
     }
 
     pub fn set_name(&self, name: &str) -> Result<()> {
-        self.name_label.set_text(name)
+        self.row.name_label.set_text(name)
     }
 
     pub fn set_brightness(&self, value: u32) -> Result<()> {
-        self.slider.set_value(value as f64)
+        self.row.slider.set_value(value as f64)
     }
 
     pub fn change_brightness(&self, value: i32) -> Result<()> {
-        self.slider.set_value(self.slider.get_value()? + value as f64)
+        self.row.slider.set_value(self.row.slider.get_value()? + value as f64)
     }
 
     pub fn ui(&self) -> &StackPanel {
-        &self.ui
+        &self.row.ui
     }
 }
 

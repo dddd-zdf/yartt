@@ -45,6 +45,10 @@ impl<K: PartialEq, V: SortKeyExtract> OrderedMap<K, V> {
     pub fn len(&self) -> usize {
         self.items.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
 }
 
 impl<K: Debug, V: Debug> Debug for OrderedMap<K, V> {

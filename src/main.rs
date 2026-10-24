@@ -59,7 +59,7 @@ pub enum CustomEvent {
     MonitorRenamed { path: MonitorPath, name: String },
     BrightnessChanged { path: MonitorPath, value: u32 },
     FeatureChanged { path: MonitorPath, feature: Feature, value: Option<FeatureValue> },
-    LinkedBrightnessChanged { path: MonitorPath, value: u32 },
+    LinkedBrightnessChanged(u32),
     ToggleLinked,
     ChangeGeneralBrightness(f32),
     ReinitializeControls
@@ -284,8 +284,8 @@ fn run() -> Result<()> {
                     // Not shown in the flyout yet
                     debug!("{:?} of {:?}: {:?}", feature, path, value);
                 }
-                CustomEvent::LinkedBrightnessChanged { path, value } => {
-                    flyout.sync_linked(&path, value)?;
+                CustomEvent::LinkedBrightnessChanged(value) => {
+                    flyout.set_all(value)?;
                 }
                 CustomEvent::ToggleLinked => {
                     let mut lock = config.lock_no_poison();

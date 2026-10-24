@@ -5,9 +5,9 @@ YARTT (Yet Another Rusty Twinkle Tray), forked from
 
 ## Unreleased
 
-- Linked monitors: a Link button in the flyout's bottom bar. While linked, moving one slider
-  moves the others to the same level, and tray scroll and hotkeys step all monitors from one
-  shared level. Turning it on brings every monitor to the first one's level. Saved as
+- Linked monitors: a Link button in the flyout's bottom bar. While linked, the flyout shows one
+  "All monitors" slider in place of the per-monitor ones, and tray scroll and hotkeys move that
+  slider. Turning it on brings every monitor to the first one's level. Saved as
   `LinkedBrightness` in the ini. Nobody needs to act.
 - Restore timing from Twinkle Tray: after waking from sleep, brightness is reapplied after 8 s
   (it was right away, often before the monitors answered). After a display change it waits
