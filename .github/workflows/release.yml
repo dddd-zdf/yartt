@@ -25,9 +25,9 @@ jobs:
     - name: Generate artifact attestation
       uses: actions/attest-build-provenance@v1
       with:
-        subject-path: target/x86_64-pc-windows-msvc/release/rusty-twinkle-tray.exe
+        subject-path: target/x86_64-pc-windows-msvc/release/yartt.exe
     - name: Upload release asset
       uses: softprops/action-gh-release@v2
       with:
-        files: target/x86_64-pc-windows-msvc/release/rusty-twinkle-tray.exe
+        files: target/x86_64-pc-windows-msvc/release/yartt.exe
         tag_name: ${{ github.event.release.tag_name }}

@@ -235,6 +235,8 @@ fn run() -> Result<()> {
                     click_watcher.clear();
                     proxy_window.deactivate();
                     config.lock_no_poison().save_if_dirty()?;
+                    // Picks up slider moves made in the flyout
+                    tray.set_tooltip(flyout.brightness_summary()?);
                     last_close = Instant::now();
                 }
                 CustomEvent::ClickedOutside => {
@@ -301,6 +303,7 @@ fn run() -> Result<()> {
                 }
                 CustomEvent::BrightnessChanged { path, value } => {
                     flyout.update_brightness(path, value)?;
+                    tray.set_tooltip(flyout.brightness_summary()?);
                 }
                 CustomEvent::FeatureChanged { path, feature, value } => {
                     debug!("{:?} of {:?}: {:?}", feature, path, value);
@@ -322,6 +325,7 @@ fn run() -> Result<()> {
                 }
                 CustomEvent::LinkedBrightnessChanged(value) => {
                     flyout.set_all(value)?;
+                    tray.set_tooltip(flyout.brightness_summary()?);
                 }
                 CustomEvent::ToggleLinked => {
                     let mut lock = config.lock_no_poison();
@@ -332,6 +336,8 @@ fn run() -> Result<()> {
                 }
                 CustomEvent::ChangeGeneralBrightness(value) => {
                     flyout.change_brightness(value.round() as i32)?;
+                    // Shown while the pointer rests on the icon, so scrolling there shows the new level
+                    tray.set_tooltip(flyout.brightness_summary()?);
                 }
                 CustomEvent::ReinitializeControls => {
                     let lock = config.lock_no_poison();

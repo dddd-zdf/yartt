@@ -5,6 +5,13 @@ YARTT (Yet Another Rusty Twinkle Tray), forked from
 
 ## Unreleased
 
+- Renamed to YARTT: the exe is `yartt.exe` and settings live in `%APPDATA%\yartt.ini`. The old
+  `rusty-twinkle-tray.ini` is moved there on first start. The autostart entry is now `_YARTT`.
+  Difei: if you had autostart on for an older build, turn it off and on again in Settings.
+- The tray icon's tooltip shows the current brightness, one line per monitor or one line while
+  linked, so scrolling over the icon shows the new level.
+- The settings window scrolls when it's short and wraps its text when it's narrow.
+- New README.
 - Flyout rows for volume and input under each monitor, shown only when the monitor supports
   them. The input list comes from the monitor's capabilities string, read once per monitor.
   While linked, each monitor still shows its own volume and input below the shared slider.

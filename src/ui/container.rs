@@ -1,6 +1,6 @@
 use windows::core::TryIntoParam;
 use windows::Foundation::Size;
-use windows_ext::UI::Xaml::Controls::{ColumnDefinition, Orientation, RowDefinition};
+use windows_ext::UI::Xaml::Controls::{ColumnDefinition, Orientation, RowDefinition, ScrollBarVisibility};
 use windows_ext::UI::Xaml::Media::Brush;
 use windows_ext::UI::Xaml::{CornerRadius, FrameworkElement, GridUnitType, UIElement};
 
@@ -208,5 +208,23 @@ impl Grid {
     }
     pub fn get_actual_width(&self) -> Result<f64> {
         Ok(self.0.ActualWidth()?)
+    }
+}
+
+new_type!(ScrollViewer, windows_ext::UI::Xaml::Controls::ScrollViewer);
+
+impl ScrollViewer {
+    /// Scrolls vertically when the content is taller than the window, and gives the content
+    /// the window's width so text can wrap.
+    pub fn vertical() -> Result<Self> {
+        let viewer = <Self as NewType>::Inner::new()?;
+        viewer.SetVerticalScrollBarVisibility(ScrollBarVisibility::Auto)?;
+        viewer.SetHorizontalScrollBarVisibility(ScrollBarVisibility::Disabled)?;
+        Ok(Self(viewer))
+    }
+
+    pub fn with_content<T: windows::core::ComInterface>(self, content: &T) -> Result<Self> {
+        self.0.SetContent(&content.cast::<windows::core::IInspectable>()?)?;
+        Ok(self)
     }
 }

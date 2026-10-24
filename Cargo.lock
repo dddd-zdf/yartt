@@ -923,20 +923,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rusty-twinkle-tray"
-version = "0.1.0"
-dependencies = [
- "betrayer",
- "dunce",
- "embedinator",
- "futures-lite",
- "log",
- "loole",
- "windows",
- "windows-ext",
-]
-
-[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1408,6 +1394,20 @@ checksum = "ec1cdab258fb55c0da61328dc52c8764709b249011b2cad0454c72f0bf10a1f6"
 dependencies = [
  "libc",
  "windows-sys",
+]
+
+[[package]]
+name = "yartt"
+version = "0.1.0"
+dependencies = [
+ "betrayer",
+ "dunce",
+ "embedinator",
+ "futures-lite",
+ "log",
+ "loole",
+ "windows",
+ "windows-ext",
 ]
 
 [[package]]

@@ -62,24 +62,35 @@ pub struct MonitorSettings {
 impl Config {
     pub fn path() -> &'static Path {
         static PATH: OnceLock<PathBuf> = OnceLock::new();
-        PATH.get_or_init(|| {
-            unsafe { SHGetKnownFolderPath(&FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, None) }
-                .map(|ptr| unsafe {
-                    let osstr = OsString::from_wide(ptr.as_wide());
-                    CoTaskMemFree(ptr.as_ptr() as _);
-                    osstr
-                })
-                .map(PathBuf::from)
-                .unwrap_or_else(|err| {
-                    log::warn!("Failed to retrieve AppData location: {}", err);
-                    log::info!("Falling back to current directory...");
-                    PathBuf::from(".")
-                })
-                .join("rusty-twinkle-tray.ini")
-        })
+        PATH.get_or_init(|| Self::app_data().join("yartt.ini"))
+    }
+
+    /// Where the settings lived before the rename from Rusty Twinkle Tray.
+    fn old_path() -> PathBuf {
+        Self::app_data().join("rusty-twinkle-tray.ini")
+    }
+
+    fn app_data() -> PathBuf {
+        unsafe { SHGetKnownFolderPath(&FOLDERID_RoamingAppData, KF_FLAG_DEFAULT, None) }
+            .map(|ptr| unsafe {
+                let osstr = OsString::from_wide(ptr.as_wide());
+                CoTaskMemFree(ptr.as_ptr() as _);
+                osstr
+            })
+            .map(PathBuf::from)
+            .unwrap_or_else(|err| {
+                log::warn!("Failed to retrieve AppData location: {}", err);
+                log::info!("Falling back to current directory...");
+                PathBuf::from(".")
+            })
     }
 
     pub fn restore() -> Result<Config> {
+        let old_path = Self::old_path();
+        if !Self::path().exists() && old_path.exists() {
+            log::info!("Moving settings from {} to {}", old_path.display(), Self::path().display());
+            std::fs::rename(&old_path, Self::path()).unwrap_or_else(|err| warn!("Failed to move old settings: {err}"));
+        }
         let mut config = Self::default();
         if Self::path().exists() {
             config.load()?;
@@ -232,7 +243,7 @@ pub mod autostart {
     });
 
     // Programs seems to start in alphabetical order. So we prefix the name with an underscore.
-    const PROGRAM_KEY: PCWSTR = w!("_RustyTwinkleTray");
+    const PROGRAM_KEY: PCWSTR = w!("_YARTT");
 
     pub fn is_enabled(user: bool) -> bool {
         AutoStartRegKey::new(user, KEY_READ)

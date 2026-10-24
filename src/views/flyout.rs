@@ -359,6 +359,23 @@ impl BrightnessFlyout {
         Ok(())
     }
 
+    /// Current levels for the tray tooltip: one line while linked, else one per monitor.
+    pub fn brightness_summary(&self) -> Result<String> {
+        if self.monitor_controls.is_empty() {
+            return Ok("Change Brightness".into());
+        }
+        if self.linked.get() {
+            return Ok(format!("Brightness: {}%", self.linked_row.slider.get_value()?));
+        }
+        let lines = self
+            .monitor_controls
+            .values()
+            .map(|entry| Ok(format!("{}: {}%", entry.name_label.text()?, entry.brightness.slider.get_value()?)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(lines.join("
+"))
+    }
+
     pub fn change_brightness(&self, delta: i32) -> Result<()> {
         if self.linked.get() {
             let slider = &self.linked_row.slider;

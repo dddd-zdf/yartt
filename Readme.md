@@ -1,65 +1,60 @@
-# Rusty Twinkle Tray
+# YARTT
 
-A small utility for quickly adjusting the brightness of external monitors using the DDC/CI protocol.
+**Yet Another Rusty Twinkle Tray.** A small Windows tray app for controlling external monitors
+over DDC/CI: brightness, linked brightness across monitors, and optionally volume and input.
 
-Rusty Twinkle Tray is a work-in-progress rewrite of Twinkle Tray in Rust. A central goal of this rewrite is to start much faster so that monitor brightness can be adjusted as soon as possible after logging in.
-
-## Screenshot
-![image](https://github.com/user-attachments/assets/7f4c05d9-865d-4cdf-ae66-8f649b262912)
+It's a fork of [Rusty Twinkle Tray](https://github.com/sidit77/rusty-twinkle-tray), a Rust
+rewrite of [Twinkle Tray](https://github.com/xanderfrangos/twinkle-tray). It uses the native
+Windows controls instead of Electron, so it's a small single exe that stays near idle when
+you're not using it.
 
 ## Features
-- Can automatically restore the last set brightness after¹:
-  - Changing display settings
-  - Waking up from sleep
-- Small (~900kb) standalone executable
-- Built using native OS controls instead of electron
-- As inactive as possible when not in use
-- Minimal dependencies
 
-¹*Many monitors tend to "forget" settings set over DDC/CI after temporarily losing power*
+- **Brightness** per monitor from the tray flyout, the mouse wheel on the tray icon, or hotkeys.
+  The tray tooltip shows the current level.
+- **Linked monitors**: one "All monitors" slider that moves every screen together.
+- **Restore**: brings back your saved brightness at startup, after waking from sleep (after 8 s)
+  and after display changes (after 5 s). Many monitors forget DDC/CI settings when they lose power.
+  The delays come from Twinkle Tray.
+- **Screen off**: turns every display off the way Windows does when idle. Any input wakes them.
+- **Optional, off by default** (Settings > Controls):
+  - a volume slider for monitors with speakers
+  - an input dropdown, built from the inputs the monitor lists itself
 
-## Precompiled Binaries
-| [**DOWNLOAD**](https://github.com/sidit77/rusty-twinkle-tray/releases/latest) |
-|-----------------------------------------------------------------------------------------------------------------|
+While an option is off, the app doesn't talk to the monitors about it at all.
+
+## Install
+
+Build it (below) and run `target\release\yartt.exe`. Turn on "Automatically run on startup" in
+Settings to start it with Windows.
+
+Settings live in `%APPDATA%\yartt.ini`. An existing `rusty-twinkle-tray.ini` is moved there on
+first start.
 
 ## Building
-This program is written in [Rust](https://www.rust-lang.org/) and requires a working Rust installation if you want to compile it yourself.
 
-This program can be built by simply running the following:
+Needs [Rust](https://www.rust-lang.org/).
+
 ```shell
 cargo build --release
 ```
 
-## Contributing
+`cargo run --example probe` prints each monitor's DDC/CI capabilities and current values without
+changing anything. It's handy for checking what a new monitor supports.
 
-### Toolkit
-This program uses the default [UWP Controls](https://learn.microsoft.com/en-us/uwp/api/windows.ui.xaml.controls?view=winrt-22621) hosted inside an XAML island.
+### UI bindings
 
-Unfortunately, the Microsoft-provided [`windows-rs` crate](https://microsoft.github.io/windows-docs-rs/doc/windows/) does not include bindings for the `Window.UI.Xaml` namespace. To nevertheless use it with Rust, this project directly uses [`windows-bindgen`](https://crates.io/crates/windows-bindgen) to manually generate the missing bindings (`libs/windows-ext`). However, the generated bindings are quite large (~1.5m LOC; ~1m of that in a single file). To keep the IDE happy, this project additionally uses a post-processor (`/libs/codegen`) that deletes many unused functions. The file `libs/windows-ext/Codegen.toml` controls which functions are kept. To regenerate the bindings after editing this file, run `just update-bindings` (requires [just](https://github.com/casey/just)).
+The flyout and settings window use the UWP XAML controls in a XAML island. `windows-rs` has no
+bindings for `Windows.UI.Xaml`, so `lib/windows-ext` holds bindings generated with
+`windows-bindgen`. `lib/codegen` trims them to the types and methods listed in
+`lib/windows-ext/Codegen.toml`. To use a new control, add it there and regenerate:
 
-### Todos
-- [ ] Improve the mess that is the current UI code
-  - Implement a reactive system using something like [reactive_graph](https://lib.rs/crates/reactive_graph)?
-- [x] Settings window
-  - [x] Toggle autostart
-  - [x] Toggle brightness restore
-  - [ ] Rename monitors
-  - [ ] Reorder monitors
-  - [ ] Change various delays/timeouts
-- [x] Hotkeys
-  - [ ] Allow for the customization of hotkeys
-  - [ ] Refresh the monitor brightness when the hotkey is pressed
-- [ ] Fluent design for Windows 11+
-- [x] Respect Dark/Light system setting
-- [x] Attempt to restore brightness after waking up from sleep
-- [ ] Support integrated laptop screens connected over I2C
-- [x] Support monitor hot plugging
-- [ ] Handle auto-hiding taskbar
-- [ ] Improve themes
-- [x] Adapt icon to system theme
-- [x] Correctly handle display scaling
+```shell
+cargo run --release --package codegen lib/windows-ext/
+```
 
+## Credits and license
 
-## License
-
-MIT License
+MIT, like the projects it builds on. Rusty Twinkle Tray is by sidit77, and Twinkle Tray, whose
+restore timings this follows, is by Xander Frangos. See [License.md](License.md) and
+[CHANGELOG.md](CHANGELOG.md).

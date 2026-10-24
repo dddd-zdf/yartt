@@ -2,17 +2,17 @@ use std::sync::{Arc, Mutex};
 
 use log::warn;
 use loole::Sender;
-use windows::core::{ComInterface, HSTRING};
+use windows::core::{ComInterface, TryIntoParam, HSTRING};
 use windows::UI::Color;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT};
 use windows_ext::IXamlSourceTransparency;
 use windows_ext::UI::Xaml::Media::SolidColorBrush;
-use windows_ext::UI::Xaml::{ElementTheme, HorizontalAlignment, RoutedEventHandler, TextAlignment, Thickness, VerticalAlignment, Window as XamlWindow};
+use windows_ext::UI::Xaml::{ElementTheme, FrameworkElement, HorizontalAlignment, RoutedEventHandler, TextAlignment, Thickness, UIElement, VerticalAlignment, Window as XamlWindow};
 use windows_ext::UI::Xaml::Controls::{TextBox};
 use windows_ext::UI::Xaml::Input::KeyEventHandler;
 use crate::config::{autostart, Config};
 use crate::monitors::{Monitor, MonitorPath};
-use crate::ui::container::StackPanel;
+use crate::ui::container::{Grid, GridSize, ScrollViewer, StackPanel};
 use crate::ui::controls::{TextBlock, ToggleSwitch};
 use crate::ui::FontWeight;
 use crate::utils::elevation::relaunch_as_elevated;
@@ -45,7 +45,7 @@ impl SettingsWindow {
 
         let window = WindowBuilder::default()
             .with_size(900, 800)
-            .with_title("Rusty Twinkle Tray Settings")
+            .with_title("YARTT Settings")
             .with_icon_resource(APP_ICON)
             .with_close_handler(cloned!([sender] move || sender
                                 .send(CustomEvent::CloseSettings)
@@ -173,8 +173,8 @@ impl SettingsWindow {
                 Ok(())
             }))?;
 
-        let feature_toggle = |text, field: fn(&mut Config) -> &mut bool| -> Result<StackPanel> {
-            let toggle = ToggleSwitch::new()?
+        let feature_toggle = |field: fn(&mut Config) -> &mut bool| -> Result<ToggleSwitch> {
+            ToggleSwitch::new()?
                 .with_width(TOGGLE_WIDTH)?
                 .with_state(*field(&mut config.lock_no_poison()))?
                 .with_toggled_handler(cloned!([config, sender] move |ts| {
@@ -183,13 +183,20 @@ impl SettingsWindow {
                     config.dirty = true;
                     sender.send_ignore(CustomEvent::ShownFeaturesChanged);
                     Ok(())
-                }))?;
-            StackPanel::horizontal()?
-                .with_child(&toggle)?
-                .with_child(&TextBlock::with_text(text)?.with_vertical_alignment(VerticalAlignment::Center)?)
+                }))
         };
-        let show_volume = feature_toggle("Show a volume slider for monitors with speakers", |c| &mut c.show_volume)?;
-        let show_input = feature_toggle("Show input selection for each monitor", |c| &mut c.show_input)?;
+        let show_volume = feature_toggle(|c| &mut c.show_volume)?;
+        let show_input = feature_toggle(|c| &mut c.show_input)?;
+
+        let restore_toggle = ToggleSwitch::new()?
+            .with_width(TOGGLE_WIDTH)?
+            .with_state(config.lock_no_poison().restore_from_config)?
+            .with_toggled_handler(cloned!([config] move |state| {
+                let mut config = config.lock_no_poison();
+                config.restore_from_config = state.get_state()?;
+                config.dirty = true;
+                Ok(())
+            }))?;
 
         let hotkey_increase = make_hotkey_editor(sender.clone(), config.clone(), |c| &mut c.brightness_increase_hotkey)?;
         let hotkey_decrease = make_hotkey_editor(sender.clone(), config.clone(), |c| &mut c.brightness_decrease_hotkey)?;
@@ -207,59 +214,19 @@ impl SettingsWindow {
             }))?;
 
         let general = section("General")?
-            .with_child(
-                &StackPanel::horizontal()?
-                    .with_child(&auto_start_toggle)?
-                    .with_child(&TextBlock::with_text("Automatically run on startup")?.with_vertical_alignment(VerticalAlignment::Center)?)?
-            )?
-            .with_child(
-                &StackPanel::horizontal()?
-                    .with_child(
-                        &ToggleSwitch::new()?
-                            .with_width(TOGGLE_WIDTH)?
-                            .with_state(config.lock_no_poison().restore_from_config)?
-                            .with_toggled_handler(cloned!([config] move |state| {
-                                let mut config = config.lock_no_poison();
-                                config.restore_from_config = state.get_state()?;
-                                config.dirty = true;
-                                Ok(())
-                            }))?
-                    )?
-                    .with_child(
-                        &TextBlock::with_text("Automatically restore saved brightness")?.with_vertical_alignment(VerticalAlignment::Center)?
-                    )?
-            )?;
+            .with_child(&option_row(&auto_start_toggle, "Automatically run on startup")?)?
+            .with_child(&option_row(&restore_toggle, "Automatically restore saved brightness")?)?;
 
         let controls = section("Controls")?
-            .with_child(&show_volume)?
-            .with_child(&show_input)?
-            .with_child(
-            &StackPanel::horizontal()?
-                .with_child(&enable_icon_scroll)?
-                .with_child(&TextBlock::with_text("Adjust the brightness of all displays by scrolling over the tray icon")?
-                    .with_vertical_alignment(VerticalAlignment::Center)?)?
-            )?
+            .with_child(&option_row(&show_volume, "Show a volume slider for monitors with speakers")?)?
+            .with_child(&option_row(&show_input, "Show input selection for each monitor")?)?
+            .with_child(&option_row(&enable_icon_scroll, "Adjust the brightness of all displays by scrolling over the tray icon")?)?
             .with_child(
                 &StackPanel::vertical()?
                     .with_spacing(5.0)?
-                    .with_child(
-                        &StackPanel::horizontal()?
-                            .with_child(&hotkey_toggle)?
-                            .with_child(&TextBlock::with_text("Adjust the brightness of all displays by pressing the following hotkeys:")?
-                                .with_vertical_alignment(VerticalAlignment::Center)?)?
-                    )?
-                    .with_child(
-                        &StackPanel::horizontal()?
-                            .with_child(&hotkey_increase)?
-                            .with_child(&TextBlock::with_text("Increase brightness")?
-                                .with_vertical_alignment(VerticalAlignment::Center)?)?
-                    )?
-                    .with_child(
-                        &StackPanel::horizontal()?
-                            .with_child(&hotkey_decrease)?
-                            .with_child(&TextBlock::with_text("Decrease brightness")?
-                                .with_vertical_alignment(VerticalAlignment::Center)?)?
-                    )?
+                    .with_child(&option_row(&hotkey_toggle, "Adjust the brightness of all displays by pressing the following hotkeys:")?)?
+                    .with_child(&option_row(&hotkey_increase, "Increase brightness")?)?
+                    .with_child(&option_row(&hotkey_decrease, "Decrease brightness")?)?
             )?;
 
         let monitors = section("Monitors")?
@@ -281,14 +248,10 @@ impl SettingsWindow {
             }
         }
 
-        let advanced = section("Advanced")?.with_child(
-            &StackPanel::horizontal()?
-                .with_child(&autostart_priority_toggle)?
-                .with_child(
-                    &TextBlock::with_text("Use higher autostart priority (requires admin permissions)")?
-                        .with_vertical_alignment(VerticalAlignment::Center)?
-                )?
-        )?;
+        let advanced = section("Advanced")?.with_child(&option_row(
+            &autostart_priority_toggle,
+            "Use higher autostart priority (requires admin permissions)"
+        )?)?;
 
         let main = StackPanel::vertical()?
             .apply_if(!self.mica, |p| p.with_background(&self.background_brush))?
@@ -299,10 +262,19 @@ impl SettingsWindow {
             .with_child(&monitors)?
             .with_child(&advanced)?;
 
-        self.window.set_content(&main)?;
+        // Scrolls when the window is too short, and passes the window's width down so text wraps
+        self.window.set_content(&ScrollViewer::vertical()?.with_content(&main)?)?;
         self.content = Some(main);
         Ok(())
     }
+}
+
+/// A control on the left with a description that wraps when the window is narrow.
+fn option_row<T: TryIntoParam<UIElement> + TryIntoParam<FrameworkElement> + Copy>(control: T, text: &str) -> Result<Grid> {
+    Grid::new()?
+        .with_column_widths([GridSize::Auto, GridSize::Fraction(1.0)])?
+        .with_child(control, 0, 0)?
+        .with_child(&TextBlock::with_text(text)?.with_vertical_alignment(VerticalAlignment::Center)?, 0, 1)
 }
 
 fn make_hotkey_editor(sender: Sender<CustomEvent>, config: Arc<Mutex<Config>>, mapper: fn(&mut Config) -> &mut KeyCombination) -> Result<TextBox> {

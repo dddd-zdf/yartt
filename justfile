@@ -7,4 +7,4 @@ update-bindings: && check-bindings
     cargo run --release --package codegen .\lib\windows-ext\
 
 format:
-    cargo +nightly fmt --package rusty-twinkle-tray
+    cargo +nightly fmt --package yartt

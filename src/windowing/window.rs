@@ -92,7 +92,7 @@ pub struct Window {
 }
 
 impl Window {
-    const CLASS_NAME: PCWSTR = w!("rusty-twinkle-tray.window");
+    const CLASS_NAME: PCWSTR = w!("yartt.window");
     fn new(builder: WindowBuilder) -> Result<Self> {
         let instance = unsafe { GetModuleHandleW(None)? };
         static REGISTER_WINDOW_CLASS: Once = Once::new();

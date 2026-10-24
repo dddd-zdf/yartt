@@ -109,6 +109,10 @@ impl TextBlock {
         Ok(self)
     }
 
+    pub fn text(&self) -> Result<String> {
+        Ok(self.0.Text()?.to_string_lossy())
+    }
+
     pub fn set_text<T: Into<HSTRING>>(&self, text: T) -> Result<()> {
         Ok(self.0.SetText(&text.into())?)
     }
