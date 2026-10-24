@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use log::{debug, warn};
 use loole::Sender;
 use windows::core::{h, IInspectable};
@@ -52,10 +55,31 @@ impl ProxyWindow {
     }
 }
 
+/// Shared by the flyout and every slider handler.
+#[derive(Default)]
+struct LinkState {
+    linked: AtomicBool,
+    /// Set while the flyout moves sliders itself (backend updates, linked syncs), so those
+    /// moves don't get passed on to the other monitors again.
+    suppress: AtomicBool
+}
+
+impl LinkState {
+    fn suppressed<R>(&self, f: impl FnOnce() -> R) -> R {
+        self.suppress.store(true, Ordering::Relaxed);
+        let result = f();
+        self.suppress.store(false, Ordering::Relaxed);
+        result
+    }
+}
+
 pub struct BrightnessFlyout {
     flyout: Flyout,
     background: AcrylicBrush,
     container: StackPanel,
+    link_button: AppBarButton,
+    link: Arc<LinkState>,
+    sender: Sender<CustomEvent>,
 
     monitor_panel: StackPanel,
     monitor_controls: OrderedMap<MonitorPath, MonitorEntry>
@@ -64,7 +88,15 @@ pub struct BrightnessFlyout {
 impl BrightnessFlyout {
     const WIDTH: f64 = 400.0;
 
-    pub fn new(sender: Sender<CustomEvent>, colors: &ColorSet) -> Result<Self> {
+    pub fn new(sender: Sender<CustomEvent>, colors: &ColorSet, linked: bool) -> Result<Self> {
+        let link_button = AppBarButton::new()?
+            .with_icon(&FontIcon::new('\u{E71B}')?)?
+            .with_label(Self::link_label(linked))?
+            .with_click_handler(cloned!([sender] move || {
+                sender.send_ignore(CustomEvent::ToggleLinked);
+                Ok(())
+            }))?;
+
         let settings = AppBarButton::new()?
             .with_icon(&FontIcon::new('\u{E713}')?)?
             .with_label("Settings")?
@@ -101,6 +133,7 @@ impl BrightnessFlyout {
             )?
             .with_child(
                 &StackPanel::horizontal()?
+                    .with_child(&link_button)?
                     .with_child(&refresh)?
                     .with_child(&settings)?,
                 0,
@@ -142,12 +175,53 @@ impl BrightnessFlyout {
                 Ok(())
             }))?;
 
+        let link = Arc::new(LinkState::default());
+        link.linked.store(linked, Ordering::Relaxed);
+
         Ok(Self {
             flyout,
             background,
             container,
+            link_button,
+            link,
+            sender,
             monitor_panel,
             monitor_controls: OrderedMap::new()
+        })
+    }
+
+    fn link_label(linked: bool) -> &'static str {
+        if linked {
+            "Linked"
+        } else {
+            "Unlinked"
+        }
+    }
+
+    /// Turning linking on brings every monitor to the level of the first one.
+    pub fn set_linked(&self, linked: bool) -> Result<()> {
+        self.link.linked.store(linked, Ordering::Relaxed);
+        self.link_button.set_label(Self::link_label(linked))?;
+        if let Some((path, entry)) = self.monitor_controls.iter().next() {
+            if linked {
+                self.sync_linked(path, entry.slider.get_value()? as u32)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Moves every other slider to `value` after the user moved the one for `source`.
+    pub fn sync_linked(&self, source: &MonitorPath, value: u32) -> Result<()> {
+        if !self.link.linked.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        self.link.suppressed(|| {
+            for (path, entry) in self.monitor_controls.iter() {
+                if path != source {
+                    entry.set_brightness(value)?;
+                }
+            }
+            Ok(())
         })
     }
 
@@ -200,7 +274,7 @@ impl BrightnessFlyout {
     pub fn register_monitor(&mut self, name: String, path: MonitorPath, position: i32, proxy: MonitorControllerProxy) -> Result<()> {
         log_assert!(self
             .monitor_controls
-            .insert(path.clone(), MonitorEntry::create(name, path, position, proxy)?)
+            .insert(path.clone(), MonitorEntry::create(name, path, position, proxy, self.sender.clone(), self.link.clone())?)
             .is_none());
         self.repopulate_monitor_list()?;
         Ok(())
@@ -229,14 +303,26 @@ impl BrightnessFlyout {
     pub fn update_brightness(&self, path: MonitorPath, new_brightness: u32) -> Result<()> {
         match self.monitor_controls.get(&path) {
             None => warn!("Monitor is not registered: {:?}", path),
-            Some(entry) => entry.set_brightness(new_brightness)?
+            // Each monitor reports its own level; that shouldn't drag the others along
+            Some(entry) => self.link.suppressed(|| entry.set_brightness(new_brightness))?
         }
         Ok(())
     }
 
-    pub fn change_brightness(&self, new_brightness: i32) -> Result<()> {
+    pub fn change_brightness(&self, delta: i32) -> Result<()> {
+        if self.link.linked.load(Ordering::Relaxed) {
+            // Step from one shared level, or monitors that started apart would stay apart
+            if let Some(first) = self.monitor_controls.values().next() {
+                let target = (first.slider.get_value()? + delta as f64).clamp(0.0, 100.0) as u32;
+                return self.link.suppressed(|| {
+                    self.monitor_controls
+                        .values()
+                        .try_for_each(|entry| entry.set_brightness(target))
+                });
+            }
+        }
         for entry in self.monitor_controls.values() {
-            entry.change_brightness(new_brightness)?;
+            entry.change_brightness(delta)?;
         }
         Ok(())
     }
@@ -250,7 +336,10 @@ struct MonitorEntry {
 }
 
 impl MonitorEntry {
-    pub fn create(name: String, path: MonitorPath, position: i32, proxy: MonitorControllerProxy) -> Result<Self> {
+    fn create(
+        name: String, path: MonitorPath, position: i32, proxy: MonitorControllerProxy, sender: Sender<CustomEvent>,
+        link: Arc<LinkState>
+    ) -> Result<Self> {
         let label = TextBlock::new()?
             .with_vertical_alignment(VerticalAlignment::Center)?
             .with_text_alignment(TextAlignment::Center)?
@@ -267,6 +356,9 @@ impl MonitorEntry {
                 let new = args.NewValue()? as u32;
                 label.set_text(hformat!("{}", new))?;
                 proxy.set_brightness(path.clone(), new);
+                if link.linked.load(Ordering::Relaxed) && !link.suppress.load(Ordering::Relaxed) {
+                    sender.send_ignore(CustomEvent::LinkedBrightnessChanged { path: path.clone(), value: new });
+                }
                 Ok(())
             }))?;
 

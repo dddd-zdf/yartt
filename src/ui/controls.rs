@@ -166,6 +166,11 @@ impl AppBarButton {
         Ok(self)
     }
 
+    pub fn set_label<T: Into<HSTRING>>(&self, text: T) -> Result<()> {
+        self.0.SetLabel(&text.into())?;
+        Ok(())
+    }
+
     pub fn with_click_handler<F>(self, mut handler: F) -> Result<Self>
     where
         F: FnMut(/*Option<&::windows_core::IInspectable>,  &RoutedEventArgs*/) -> Result<()> + Send + 'static

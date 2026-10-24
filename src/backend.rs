@@ -23,6 +23,7 @@ use crate::CustomEvent;
 enum BackendCommand {
     Stop,
     RefreshMonitors,
+    RefreshMonitorsIn(Duration),
     QueryBrightness(Option<Duration>),
     SetBrightness(MonitorPath, u32),
     Feature(MonitorPath, Feature, FeatureCommand)
@@ -45,6 +46,7 @@ impl MonitorController {
         let executor = LocalExecutor::default();
         let mut monitor_map: BTreeMap<MonitorPath, ReducingSender<MonitorCommand>> = BTreeMap::new();
         let mut delayed_query: Option<Instant> = None;
+        let mut delayed_refresh: Option<Instant> = None;
 
         executor
             .run(async {
@@ -56,8 +58,15 @@ impl MonitorController {
                             .await;
                         BackendCommand::QueryBrightness(None)
                     };
+                    let refresh_event = async {
+                        delayed_refresh
+                            .map(Timer::at)
+                            .unwrap_or_else(Timer::never)
+                            .await;
+                        BackendCommand::RefreshMonitors
+                    };
                     let command_event = async { receiver.recv_async().await.expect("Controller disappeared") };
-                    match query_event.or(command_event).await {
+                    match query_event.or(refresh_event).or(command_event).await {
                         BackendCommand::QueryBrightness(None) => {
                             delayed_query.take();
                             let config = config.lock_no_poison();
@@ -72,6 +81,7 @@ impl MonitorController {
                             });
                         }
                         BackendCommand::RefreshMonitors => {
+                            delayed_refresh.take();
                             trace!("Refreshing monitor list");
                             let mut current_monitors = Monitor::find_all()
                                 .map_err(|err| log::warn!("Failed to enumerate monitors: {err}"))
@@ -109,6 +119,12 @@ impl MonitorController {
                             }
 
                             delayed_query = Some(Instant::now());
+                        }
+                        BackendCommand::RefreshMonitorsIn(delay) => {
+                            // Each new event pushes the refresh back, so a burst of events
+                            // (Windows sends several while waking up) becomes one refresh
+                            let at = Instant::now() + delay;
+                            delayed_refresh = Some(delayed_refresh.map_or(at, |current| current.max(at)));
                         }
                         BackendCommand::QueryBrightness(Some(delay)) => {
                             delayed_query = delayed_query
@@ -471,8 +487,8 @@ impl MonitorControllerProxy {
         self.send_command(BackendCommand::QueryBrightness(Some(delay)));
     }
 
-    pub fn refresh_monitors(&self) {
-        self.send_command(BackendCommand::RefreshMonitors);
+    pub fn refresh_monitors_in(&self, delay: Duration) {
+        self.send_command(BackendCommand::RefreshMonitorsIn(delay));
     }
 
     fn send_command(&self, command: BackendCommand) {

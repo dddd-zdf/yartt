@@ -34,6 +34,10 @@ impl<K: PartialEq, V: SortKeyExtract> OrderedMap<K, V> {
         }
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = (&K, &V)> {
+        self.items.iter().map(|(k, v)| (k, v))
+    }
+
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.items.iter().map(|(_, v)| v)
     }

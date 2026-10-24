@@ -59,6 +59,8 @@ pub enum CustomEvent {
     MonitorRenamed { path: MonitorPath, name: String },
     BrightnessChanged { path: MonitorPath, value: u32 },
     FeatureChanged { path: MonitorPath, feature: Feature, value: Option<FeatureValue> },
+    LinkedBrightnessChanged { path: MonitorPath, value: u32 },
+    ToggleLinked,
     ChangeGeneralBrightness(f32),
     ReinitializeControls
 }
@@ -115,13 +117,15 @@ fn run() -> Result<()> {
             let proxy = controller.create_proxy();
             move |event| match event {
                 PowerEvent::MonitorOn => proxy.refresh_brightness_in(Duration::from_secs(10)),
-                PowerEvent::Resume => proxy.refresh_monitors(),
+                // Timings from Twinkle Tray: monitors ignore DDC/CI for a few seconds after
+                // waking, and display changes arrive in bursts
+                PowerEvent::Resume => proxy.refresh_monitors_in(Duration::from_secs(8)),
                 _ => {}
             }
         })?
         .on_display_change({
             let proxy = controller.create_proxy();
-            move || proxy.refresh_monitors()
+            move || proxy.refresh_monitors_in(Duration::from_secs(5))
         })?;
 
     ui_settings.ColorValuesChanged(&TypedEventHandler::new(cloned!([wnd_sender] move |_: &Option<UISettings>, _| {
@@ -130,7 +134,8 @@ fn run() -> Result<()> {
     })))?;
 
     let proxy_window = ProxyWindow::new()?;
-    let mut flyout = BrightnessFlyout::new(wnd_sender.clone(), &colors)?;
+    let linked = config.lock_no_poison().linked_brightness;
+    let mut flyout = BrightnessFlyout::new(wnd_sender.clone(), &colors, linked)?;
     let mut settings_window: Option<SettingsWindow> = None;
 
     if settings_mode {
@@ -278,6 +283,16 @@ fn run() -> Result<()> {
                 CustomEvent::FeatureChanged { path, feature, value } => {
                     // Not shown in the flyout yet
                     debug!("{:?} of {:?}: {:?}", feature, path, value);
+                }
+                CustomEvent::LinkedBrightnessChanged { path, value } => {
+                    flyout.sync_linked(&path, value)?;
+                }
+                CustomEvent::ToggleLinked => {
+                    let mut lock = config.lock_no_poison();
+                    lock.linked_brightness = !lock.linked_brightness;
+                    lock.dirty = true;
+                    info!("Linked brightness: {}", lock.linked_brightness);
+                    flyout.set_linked(lock.linked_brightness)?;
                 }
                 CustomEvent::ChangeGeneralBrightness(value) => {
                     flyout.change_brightness(value.round() as i32)?;

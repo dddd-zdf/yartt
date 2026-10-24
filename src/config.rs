@@ -18,6 +18,7 @@ use crate::windowing::hotkey::{KeyCombination, Modifier, VirtualKey};
 pub struct Config {
     pub dirty: bool,
     pub restore_from_config: bool,
+    pub linked_brightness: bool,
     pub use_prioritized_autostart: bool,
     pub icon_scoll_enabled: bool,
     pub icon_scroll_step_size: f32,
@@ -33,6 +34,7 @@ impl Default for Config {
         Self {
             dirty: true,
             restore_from_config: true,
+            linked_brightness: false,
             use_prioritized_autostart: false,
             icon_scoll_enabled: false,
             icon_scroll_step_size: 5.0,
@@ -96,6 +98,7 @@ impl Config {
 
         write!(file, "[General]\r\n")?;
         write!(file, "RestoreFromConfig={}\r\n", self.restore_from_config)?;
+        write!(file, "LinkedBrightness={}\r\n", self.linked_brightness)?;
         write!(file, "UsePrioritizedAutostart={}\r\n", self.use_prioritized_autostart)?;
         write!(file, "IconScrollEnabled={}\r\n", self.icon_scoll_enabled)?;
         write!(file, "IconScrollStepSize={}\r\n", self.icon_scroll_step_size)?;
@@ -157,6 +160,7 @@ impl Config {
             match section.as_str() {
                 "General" => match key {
                     "RestoreFromConfig" => self.restore_from_config = value.parse()?,
+                    "LinkedBrightness" => self.linked_brightness = value.parse()?,
                     "UsePrioritizedAutostart" => self.use_prioritized_autostart = value.parse()?,
                     "IconScrollEnabled" => self.icon_scoll_enabled = value.parse()?,
                     "IconScrollStepSize" => self.icon_scroll_step_size = value.parse()?,
