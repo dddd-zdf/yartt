@@ -5,6 +5,10 @@ YARTT (Yet Another Rusty Twinkle Tray), forked from
 
 ## Unreleased
 
+- New logo: a monitor with a thin sun. The tray icon comes in 16, 20, 24 and 32 px versions and
+  the app picks the one matching the display scaling, so it isn't blurred by scaling. 16 px is
+  hand-drawn pixel art. All of them are drawn by `assets/icons/render.py`.
+- Known issue: on a high-DPI screen the tray sun is nearly invisible (to fix).
 - Renamed to YARTT: the exe is `yartt.exe` and settings live in `%APPDATA%\yartt.ini`. The old
   `rusty-twinkle-tray.ini` is moved there on first start. The autostart entry is now `_YARTT`.
   Difei: if you had autostart on for an older build, turn it off and on again in Settings.

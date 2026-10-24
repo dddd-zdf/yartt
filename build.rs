@@ -4,11 +4,7 @@ use embedinator::{Icon, ResourceBuilder};
 
 include!("assets/ids.rs");
 
-const ICONS: &[(u16, &str)] = &[
-    (APP_ICON, "assets/app.png"),
-    (BRIGHTNESS_LIGHT_ICON, "assets/brightness_light.png"),
-    (BRIGHTNESS_DARK_ICON, "assets/brightness_dark.png")
-];
+const ICONS: &[(u16, &str)] = &[(APP_ICON, "assets/app.png")];
 
 fn main() {
     let mut res = ResourceBuilder::from_env().add_manifest(read_to_string("assets/app.manifest").unwrap());
@@ -16,9 +12,17 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/app.manifest");
     println!("cargo:rerun-if-changed=assets/ids.rs");
 
-    for (id, name) in ICONS.iter().copied() {
+    let tray_icons = [false, true].into_iter().flat_map(|dark| {
+        TRAY_SIZES.iter().enumerate().map(move |(index, size)| {
+            let theme = if dark { "dark" } else { "light" };
+            (tray_icon_id(dark, index), format!("assets/icons/tray_{theme}_{size}.png"))
+        })
+    });
+    let icons = ICONS.iter().map(|&(id, name)| (id, name.to_string())).chain(tray_icons);
+
+    for (id, name) in icons {
         println!("cargo:rerun-if-changed={}", name);
-        res = res.add_icon(id, Icon::from_png_bytes(read(name).unwrap()));
+        res = res.add_icon(id, Icon::from_png_bytes(read(&name).unwrap()));
     }
 
     res.finish();

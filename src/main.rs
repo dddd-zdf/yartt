@@ -69,6 +69,21 @@ pub enum CustomEvent {
     ReinitializeControls
 }
 
+/// The tray icon drawn for the current small-icon size, so it stays sharp instead of being scaled.
+fn tray_icon(theme: ElementTheme) -> Result<Icon> {
+    use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
+    use windows::Win32::UI::WindowsAndMessaging::SM_CXSMICON;
+
+    let wanted = unsafe { GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForSystem()) };
+    // The smallest one at least as big as Windows wants, so it's only ever scaled down
+    let index = TRAY_SIZES
+        .iter()
+        .position(|&size| size as i32 >= wanted)
+        .unwrap_or(TRAY_SIZES.len() - 1);
+    let size = TRAY_SIZES[index];
+    Ok(Icon::from_resource(tray_icon_id(theme != ElementTheme::Light, index), Some((size, size)))?)
+}
+
 /// Turns every display off the way Windows does after idling; any input wakes them again.
 fn screen_off() {
     // Wait a moment, so the mouse movement after the click doesn't wake them right away
@@ -116,14 +131,7 @@ fn run() -> Result<()> {
 
     let tray = TrayIconBuilder::new()
         .with_tooltip("Change Brightness")
-        .with_icon(Icon::from_resource(
-            if colors.theme == ElementTheme::Light {
-                BRIGHTNESS_LIGHT_ICON
-            } else {
-                BRIGHTNESS_DARK_ICON
-            },
-            None
-        )?)
+        .with_icon(tray_icon(colors.theme)?)
         .with_menu(Menu::new([MenuItem::button("Quit", CustomEvent::Quit)]))
         .build(cloned!([wnd_sender] move |event| wnd_sender.filter_send_ignore(match event {
             TrayEvent::Tray(ClickType::Left) => Some(CustomEvent::Show),
@@ -248,14 +256,7 @@ fn run() -> Result<()> {
                         .ok()
                         .map_or_else(ColorSet::dark, |system_settings| ColorSet::system(&system_settings, &ui_settings));
                     flyout.update_theme(&colors)?;
-                    tray.set_icon(Icon::from_resource(
-                        if colors.theme == ElementTheme::Light {
-                            BRIGHTNESS_LIGHT_ICON
-                        } else {
-                            BRIGHTNESS_DARK_ICON
-                        },
-                        None
-                    )?);
+                    tray.set_icon(tray_icon(colors.theme)?);
                     if let Some(window) = settings_window.as_ref() {
                         window
                             .sync_theme()
